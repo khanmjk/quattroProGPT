@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Quattro Pro (DOS Style) v0.12</title>
+    <style>
+        /* --- Grid Container & Table Styling (Reverted td, kept z-index) --- */
+        #grid-container {
+            flex-grow: 1; overflow: auto; border: 1px solid #C0C0C0;
+            background-color: #000080; scroll-behavior: auto; position: relative;
+        }
+        #spreadsheet { border-collapse: collapse; table-layout: fixed; border: 1px solid #808080; }
+
+        #spreadsheet th { border: 1px solid #808080; padding: 2px 5px; height: 20px; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; user-select: none; background-color: #C0C0C0; color: #000000; font-weight: bold; text-align: center; }
+        #spreadsheet thead tr th:not(:first-child) { position: sticky; top: 0; min-width: 70px; z-index: 5; background-color: #C0C0C0; }
+        #spreadsheet tbody tr th:first-child { position: sticky; left: 0; min-width: 40px; width: 40px; z-index: 10; background-color: #C0C0C0; }
+        #spreadsheet thead tr th:first-child { position: sticky; top: 0; left: 0; z-index: 15; min-width: 40px; width: 40px; background-color: #C0C0C0; }
+        /* Removed position: relative from td */
+        #spreadsheet td { border: 1px solid #808080; padding: 2px 5px; min-width: 70px; height: 20px; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; user-select: none; background-color: #FFFFFF; color: #000000; cursor: cell; }
+        #spreadsheet td.active { outline: 2px solid #00AAAA; outline-offset: -2px; background-color: #FFFFE0; }
+        #spreadsheet td.number { text-align: right; }
+        /* --- End Grid --- */
+
+        /* Other styles */
+        #menu-bar { z-index: 20; }
+        #dropdown-menu-container { z-index: 25; }
+        body { font-family: 'Courier New', Courier, monospace; font-size: 14px; background-color: #000080; color: #FFFFFF; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #splash-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: #000080; color: #FFFF00; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; font-size: 18px; text-align: center; line-height: 1.6; pointer-events: auto; }
+        #splash-screen.hidden { display: none; pointer-events: none; }
+        #splash-screen strong { color: #FFFFFF; font-size: 24px; }
+        #app-container { border: 2px solid #C0C0C0; background-color: #0000AA; padding: 5px; display: flex; flex-direction: column; flex-grow: 1; min-height: 0; }
+        #app-container.ready { visibility: visible; }
+        #menu-bar { background-color: #C0C0C0; color: #000000; padding: 1px 5px; margin-bottom: 3px; display: flex; flex-shrink: 0; height: 18px; align-items: center; position: relative; }
+        .menu-item { padding: 0 8px; cursor: default; white-space: nowrap; position: relative; }
+        .menu-item.active-menu { background-color: #0000AA; color: #FFFF00; }
+        #dropdown-menu-container { position: absolute; background-color: #C0C0C0; color: #000000; border: 1px solid #808080; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); padding: 3px 0; min-width: 120px; display: none; }
+        .dropdown-item { padding: 2px 15px; cursor: default; white-space: nowrap; display: block; }
+        .dropdown-item.active-dropdown-item { background-color: #0000AA; color: #FFFF00; }
+        #top-bar { display: flex; align-items: center; background-color: #000080; padding: 3px 5px; border-bottom: 1px solid #C0C0C0; margin-bottom: 5px; flex-shrink: 0; }
+        #current-cell-label { background-color: #00AAAA; color: #000000; padding: 2px 6px; margin-right: 5px; min-width: 50px; text-align: center; font-weight: bold; border: 1px solid #FFFFFF; }
+        #formula-input { flex-grow: 1; background-color: #FFFFFF; color: #000000; border: 1px solid #000000; padding: 2px 4px; font-family: inherit; font-size: inherit; outline: none; }
+        #status-bar { background-color: #C0C0C0; color: #000000; padding: 2px 5px; margin-top: 5px; font-size: 12px; flex-shrink: 0; height: 16px; }
+    </style>
+</head>
+<body>
+
+    <div id="splash-screen">
+        <p><strong>Web Quattro Pro</strong></p>
+        <p>(DOS Style Spreadsheet)</p>
+        <p>Version 0.12</p>
+        <p>Loading...</p>
+    </div>
+
+    <div id="app-container">
+        <div id="menu-bar"></div>
+        <div id="dropdown-menu-container"></div>
+        <div id="top-bar">
+            <span id="current-cell-label">A1</span>
+            <input type="text" id="formula-input">
+        </div>
+        <div id="grid-container">
+            <table id="spreadsheet">
+                <thead> <tr id="col-headers"></tr> </thead>
+                <tbody id="grid-body"></tbody>
+            </table>
+        </div>
+        <div id="status-bar">INITIALIZING</div>
+    </div>
+
+    <script>
+        // --- JAVASCRIPT (handleGridScroll logic is new, td position:relative removed from CSS) ---
+        const COLS = 26;
+        const ROWS = 100;
+        const SPLASH_DURATION = 1000;
+
+        const gridData = {};
+        let activeCell = { row: 0, col: 0 };
+        let isMenuActive = false;
+        let activeMenuIndex = -1;
+        let isDropdownOpen = false;
+        let activeDropdownIndex = -1;
+        let currentDropdownItems = [];
+
+        // DOM Elements
+        const splashScreen = document.getElementById('splash-screen');
+        const appContainer = document.getElementById('app-container');
+        const formulaInput = document.getElementById('formula-input');
+        const currentCellLabel = document.getElementById('current-cell-label');
+        const gridBody = document.getElementById('grid-body');
+        const colHeaders = document.getElementById('col-headers');
+        const statusBar = document.getElementById('status-bar');
+        const menuBar = document.getElementById('menu-bar');
+        const gridContainer = document.getElementById('grid-container');
+        const dropdownContainer = document.getElementById('dropdown-menu-container');
+        const spreadsheetTable = document.getElementById('spreadsheet');
+
+        // Menu Definition (Unchanged)
+        const menuItems = [ { name: "File", submenu: [ { name: "New", action: () => alert("Action: New File") }, { name: "Open...", action: () => alert("Action: Open File") }, { name: "Save", action: () => alert("Action: Save File") }, { name: "Save As...", action: () => alert("Action: Save As") }, { name: "---" }, { name: "Exit", action: () => { if(confirm("Exit Web Quattro?")) { window.close(); } } } ]}, { name: "Edit", submenu: [ { name: "Undo", action: () => alert("Action: Undo") }, { name: "---" }, { name: "Cut", action: () => alert("Action: Cut") }, { name: "Copy", action: () => alert("Action: Copy") }, { name: "Paste", action: () => alert("Action: Paste") }, { name: "Clear", action: () => alert("Action: Clear Cell") } ]}, { name: "Style", submenu: [ { name: "Font...", action: () => alert("Action: Font Style") }, { name: "Alignment...", action: () => alert("Action: Alignment") }, { name: "Number Format...", action: () => alert("Action: Number Format") } ]}, { name: "Graph", submenu: [ { name: "New Graph...", action: () => alert("Action: New Graph") }, { name: "View Graph...", action: () => alert("Action: View Graph") } ]}, { name: "Tools", submenu: [ { name: "Recalculate", action: () => { recalculateSheet(); updateStatusBar("Sheet Recalculated."); } }, { name: "Options...", action: () => alert("Action: Options") } ]}, { name: "Help", action: () => alert("Web Quattro Pro (DOS Style) v0.12\n\nUse '/' to activate menu.") } ];
+
+        // Debounce Utility (Unchanged)
+        function debounce(func, wait) { let timeout; return function executedFunction(...args) { const later = () => { clearTimeout(timeout); func(...args); }; clearTimeout(timeout); timeout = setTimeout(later, wait); }; }
+
+        // Helper Functions (Unchanged)
+        function getColName(colIndex) { let name = ''; let num = colIndex + 1; while (num > 0) { let rem = (num - 1) % 26; name = String.fromCharCode(65 + rem) + name; num = Math.floor((num - 1) / 26); } return name; }
+        function getCellAddress(row, col) { return getColName(col) + (row + 1); }
+        function parseCellAddress(address) { const match = address.match(/^([A-Z]+)([1-9][0-9]*)$/i); if (!match) return null; const colName = match[1].toUpperCase(); const rowNum = parseInt(match[2], 10); let col = 0; for (let i = 0; i < colName.length; i++) { col = col * 26 + (colName.charCodeAt(i) - 64); } return { row: rowNum - 1, col: col - 1 }; }
+        function getCellElement(row, col) { if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null; const tableRow = gridBody.rows[row]; if (!tableRow) return null; return tableRow.cells[col + 1]; }
+
+        // Grid Initialization (Unchanged)
+        function createGrid() { let headerHtml = '<th></th>'; for (let c = 0; c < COLS; c++) { headerHtml += `<th>${getColName(c)}</th>`; } colHeaders.innerHTML = headerHtml; let bodyHtml = ''; for (let r = 0; r < ROWS; r++) { bodyHtml += `<tr><th>${r + 1}</th>`; for (let c = 0; c < COLS; c++) { const cellId = `cell-${r}-${c}`; bodyHtml += `<td id="${cellId}" data-row="${r}" data-col="${c}"></td>`; } bodyHtml += `</tr>`; } gridBody.innerHTML = bodyHtml; }
+
+        // Menu Functions (Unchanged)
+        function renderMenu() { menuBar.innerHTML = ''; menuItems.forEach((item, index) => { const menuItemElem = document.createElement('span'); menuItemElem.classList.add('menu-item'); menuItemElem.textContent = item.name; menuItemElem.dataset.index = index; menuItemElem.addEventListener('mouseenter', (e) => { if (isMenuActive) { const idx = parseInt(e.target.dataset.index); highlightMenuItem(idx); if (menuItems[idx].submenu) { openDropdown(idx); } else { closeDropdown(); } } }); menuItemElem.addEventListener('mousedown', (e) => { e.preventDefault(); const idx = parseInt(e.target.dataset.index); if (!isMenuActive) { activateMenu(idx); if (menuItems[idx].submenu) { openDropdown(idx); } } else { if (activeMenuIndex === idx && isDropdownOpen) { closeDropdown(); } else { highlightMenuItem(idx); if (menuItems[idx].submenu) { openDropdown(idx); } else { closeDropdown(); } } } }); menuBar.appendChild(menuItemElem); }); }
+        function highlightMenuItem(index) { if (index < 0 || index >= menuItems.length) return; const prevActive = menuBar.querySelector('.active-menu'); if (prevActive) { prevActive.classList.remove('active-menu'); } const currentItem = menuBar.children[index]; if (currentItem) { currentItem.classList.add('active-menu'); activeMenuIndex = index; if (!isDropdownOpen) { updateStatusBar(`Menu: ${menuItems[activeMenuIndex].name}`); } } }
+        function activateMenu(startIndex = 0) { if (isMenuActive) return; isMenuActive = true; activeMenuIndex = startIndex; highlightMenuItem(startIndex); formulaInput.blur(); updateStatusBar(`Menu Mode - ${menuItems[activeMenuIndex].name}`); }
+        function deactivateMenu() { closeDropdown(); if (!isMenuActive) return; isMenuActive = false; const prevActive = menuBar.querySelector('.active-menu'); if (prevActive) { prevActive.classList.remove('active-menu'); } activeMenuIndex = -1; setTimeout(() => formulaInput.focus(), 0); updateStatusBar(`Cell: ${getCellAddress(activeCell.row, activeCell.col)} | READY`); }
+        function openDropdown(menuIndex) { if (menuIndex < 0 || menuIndex >= menuItems.length || !menuItems[menuIndex].submenu) { closeDropdown(); return; } closeDropdown(); currentDropdownItems = menuItems[menuIndex].submenu; isDropdownOpen = true; activeDropdownIndex = 0; dropdownContainer.innerHTML = ''; currentDropdownItems.forEach((item, index) => { const dropdownItemElem = document.createElement('div'); if (item.name === '---') { dropdownItemElem.innerHTML = '<hr style="margin: 2px 0; border-color: #808080;">'; dropdownItemElem.style.padding = '0'; } else { dropdownItemElem.classList.add('dropdown-item'); dropdownItemElem.textContent = item.name; dropdownItemElem.dataset.index = index; dropdownItemElem.addEventListener('mouseenter', (e) => { highlightDropdownItem(parseInt(e.target.dataset.index)); }); dropdownItemElem.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }); dropdownItemElem.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); executeDropdownItem(parseInt(e.target.dataset.index)); }); } dropdownContainer.appendChild(dropdownItemElem); }); const menuItemElem = menuBar.children[menuIndex]; const menuRect = menuItemElem.getBoundingClientRect(); const containerRect = appContainer.getBoundingClientRect(); dropdownContainer.style.top = `${menuRect.bottom - containerRect.top}px`; dropdownContainer.style.left = `${menuRect.left - containerRect.left}px`; dropdownContainer.style.display = 'block'; highlightDropdownItem(activeDropdownIndex); }
+        function closeDropdown() { if (!isDropdownOpen) return; isDropdownOpen = false; dropdownContainer.style.display = 'none'; dropdownContainer.innerHTML = ''; currentDropdownItems = []; activeDropdownIndex = -1; if (isMenuActive && activeMenuIndex >= 0) { updateStatusBar(`Menu: ${menuItems[activeMenuIndex].name}`); } }
+        function highlightDropdownItem(index) { if (!isDropdownOpen) return; let targetIndex = -1; let domIndex = 0; for(let i=0; i<currentDropdownItems.length; i++) { if(currentDropdownItems[i].name !== '---') { if(domIndex === index) { targetIndex = i; break; } domIndex++; } } if(targetIndex === -1 || targetIndex >= currentDropdownItems.length) return; const prevActive = dropdownContainer.querySelector('.active-dropdown-item'); if (prevActive) { prevActive.classList.remove('active-dropdown-item'); } let currentItemElem = null; let currentDomIdx = 0; for(let i = 0; i < dropdownContainer.children.length; i++) { const child = dropdownContainer.children[i]; if (child.classList.contains('dropdown-item')) { if (currentDomIdx === index) { currentItemElem = child; break; } currentDomIdx++; } } if (currentItemElem) { currentItemElem.classList.add('active-dropdown-item'); activeDropdownIndex = index; updateStatusBar(`Menu: ${menuItems[activeMenuIndex].name} -> ${currentDropdownItems[targetIndex].name}`); } }
+        function moveDropdownHighlight(direction) { if (!isDropdownOpen) return; let currentDomIndex = activeDropdownIndex; let potentialDomIndex = currentDomIndex; let domItemCount = Array.from(dropdownContainer.children).filter(el => el.classList.contains('dropdown-item')).length; do { potentialDomIndex = (potentialDomIndex + direction + domItemCount) % domItemCount; } while (potentialDomIndex === currentDomIndex); highlightDropdownItem(potentialDomIndex); }
+        function executeDropdownItem(domIndex) { if (!isDropdownOpen) return; let targetIndex = -1; let currentDomIdx = 0; for(let i=0; i<currentDropdownItems.length; i++) { if(currentDropdownItems[i].name !== '---') { if(currentDomIdx === domIndex) { targetIndex = i; break; } currentDomIdx++; } } if (targetIndex === -1 || targetIndex >= currentDropdownItems.length) return; const item = currentDropdownItems[targetIndex]; if (item && item.name !== '---' && typeof item.action === 'function') { closeDropdown(); deactivateMenu(); item.action(); } }
+
+        // Cell Activation & Data (Unchanged)
+        function setActiveCell(row, col, focusInput = false) { if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return; if (isMenuActive) deactivateMenu(); const address = getCellAddress(row, col); const cellData = gridData[address] || { value: '', formula: '', displayValue: '' }; const displayValueFromData = cellData.displayValue ?? cellData.value ?? ''; const oldCellElem = getCellElement(activeCell.row, activeCell.col); if (oldCellElem) { oldCellElem.classList.remove('active'); } activeCell = { row, col }; const newCellElem = getCellElement(row, col); if (newCellElem) { newCellElem.classList.remove('number'); newCellElem.classList.add('active'); newCellElem.scrollIntoView({ block: 'nearest', inline: 'nearest' }); updateCellDisplay(row, col, displayValueFromData); } currentCellLabel.textContent = address; formulaInput.value = cellData.formula || cellData.value || ''; if (focusInput) { setTimeout(() => { formulaInput.focus(); formulaInput.select(); }, 0); } else { if (document.activeElement === formulaInput) { formulaInput.blur(); } } updateStatusBar(`Cell: ${address} | Content: ${formulaInput.value}`); }
+        function updateCellData(row, col, rawValue) { const address = getCellAddress(row, col); let formula = null; let value = rawValue; if (typeof rawValue === 'string' && rawValue.startsWith('=')) { formula = rawValue; value = null; } else { const num = parseFloat(rawValue); if (!isNaN(num) && rawValue.trim() !== '') { value = num; } } gridData[address] = { value: value, formula: formula, displayValue: '' }; calculateCell(row, col); recalculateSheet(); }
+        function getCellValue(address) { const coords = parseCellAddress(address); if (!coords) return '#REF!'; const { row, col } = coords; if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return '#REF!'; return calculateCell(row, col); }
+        function evaluateFormula(formula) { if (!formula || !formula.startsWith('=')) return formula; let expression = formula.substring(1); expression = expression.replace(/([A-Z]+)([1-9][0-9]*)/gi, (match) => { const val = getCellValue(match); const numVal = parseFloat(val); if (typeof val === 'string' && val.startsWith('#')) return 0; return isNaN(numVal) ? 0 : numVal; }); try { const sanitizedExpression = expression.replace(/[^-()\d/*+.]/g, ''); const result = eval(sanitizedExpression); return isFinite(result) ? result : '#NUM!'; } catch (error) { console.error("Formula Error:", error); return '#ERROR!'; } }
+        function calculateCell(row, col) { const address = getCellAddress(row, col); const cellData = gridData[address]; if (!cellData) { updateCellDisplay(row, col, ''); return ''; } if (cellData.isCalculating) { console.warn("Circular reference detected for:", address); return '#CIRC!'; } let displayValue; if (cellData.formula) { cellData.isCalculating = true; try { displayValue = evaluateFormula(cellData.formula); } catch (e) { console.error(`Error calculating ${address}: ${e}`); displayValue = '#ERROR!'; } finally { delete cellData.isCalculating; } } else { displayValue = cellData.value; } cellData.displayValue = displayValue; updateCellDisplay(row, col, displayValue); return displayValue; }
+        function recalculateSheet() { console.time("RecalculateSheet"); for (const address in gridData) { if (gridData[address] && gridData[address].formula) { const coords = parseCellAddress(address); if(coords) { calculateCell(coords.row, coords.col); } } } console.timeEnd("RecalculateSheet"); if (!isMenuActive && !isDropdownOpen) { updateStatusBar(`Recalculated. Cell: ${getCellAddress(activeCell.row, activeCell.col)} | READY`); } }
+        function updateCellDisplay(row, col, displayValue) { const cellElem = getCellElement(row, col); if (cellElem) { const valueToShow = (displayValue === null || displayValue === undefined) ? '' : displayValue; let formattedValue = valueToShow; cellElem.textContent = formattedValue; cellElem.title = valueToShow; if (typeof valueToShow === 'number' && isFinite(valueToShow)) { cellElem.classList.add('number'); } else { cellElem.classList.remove('number'); } } }
+
+        // Event Listeners (Unchanged)
+        function handleGridClick(event) { const target = event.target; if (target.tagName === 'TD') { const row = parseInt(target.dataset.row, 10); const col = parseInt(target.dataset.col, 10); setActiveCell(row, col, true); } else if (target.tagName === 'TH') { if (isMenuActive) deactivateMenu(); let newRow = activeCell.row, newCol = activeCell.col; if (target.parentNode.id === 'col-headers' && target.cellIndex > 0) { newRow = 0; newCol = target.cellIndex - 1; } else if (target.parentNode.parentNode.id === 'grid-body') { const rowIndex = Array.from(target.parentNode.parentNode.children).indexOf(target.parentNode); if (rowIndex !== -1) { newRow = rowIndex; newCol = 0; } } setActiveCell(newRow, newCol, false); } }
+        function handleFormulaInputChange() { if (!isMenuActive && !isDropdownOpen) { updateCellData(activeCell.row, activeCell.col, formulaInput.value); } }
+        function handleFormulaInputFocus() { if (isMenuActive) { deactivateMenu(); } }
+        function handleKeyDown(event) { let handled = false; const isInputFocused = document.activeElement === formulaInput; if (event.key === '/' && !isInputFocused && !isMenuActive && !isDropdownOpen) { activateMenu(0); handled = true; event.preventDefault(); event.stopPropagation(); return; } if (isDropdownOpen) { switch (event.key) { case 'ArrowUp': moveDropdownHighlight(-1); handled = true; break; case 'ArrowDown': moveDropdownHighlight(1); handled = true; break; case 'Enter': case ' ': executeDropdownItem(activeDropdownIndex); handled = true; break; case 'Escape': closeDropdown(); handled = true; break; case 'ArrowLeft': case 'ArrowRight': const direction = (event.key === 'ArrowLeft' ? -1 : 1); const nextMenuIndex = (activeMenuIndex + direction + menuItems.length) % menuItems.length; closeDropdown(); highlightMenuItem(nextMenuIndex); if (menuItems[nextMenuIndex].submenu) { openDropdown(nextMenuIndex); } handled = true; break; } } else if (isMenuActive) { switch (event.key) { case 'ArrowLeft': highlightMenuItem((activeMenuIndex - 1 + menuItems.length) % menuItems.length); handled = true; break; case 'ArrowRight': highlightMenuItem((activeMenuIndex + 1) % menuItems.length); handled = true; break; case 'ArrowDown': case 'Enter': case ' ': const currentItem = menuItems[activeMenuIndex]; if (currentItem) { if (currentItem.submenu) { openDropdown(activeMenuIndex); } else if (currentItem.action) { deactivateMenu(); currentItem.action(); } } handled = true; break; case 'Escape': deactivateMenu(); handled = true; break; } } else { switch (event.key) { case 'Enter': if (isInputFocused) { handleFormulaInputChange(); setActiveCell(activeCell.row + 1, activeCell.col); } else { formulaInput.focus(); formulaInput.select(); } handled = true; break; case 'Escape': if (isInputFocused) formulaInput.blur(); handled = true; break; case 'Tab': handleFormulaInputChange(); if (document.activeElement === formulaInput) formulaInput.blur(); let { row, col } = activeCell; if (event.shiftKey) { col--; if (col < 0) { col = COLS - 1; row--; } } else { col++; if (col >= COLS) { col = 0; row++; } } row = Math.max(0, Math.min(ROWS - 1, row)); setActiveCell(row, col); handled = true; break; case 'ArrowUp': handleFormulaInputChange(); if (document.activeElement === formulaInput) formulaInput.blur(); setActiveCell(Math.max(0, activeCell.row - 1), activeCell.col); handled = true; break; case 'ArrowDown': handleFormulaInputChange(); if (document.activeElement === formulaInput) formulaInput.blur(); setActiveCell(Math.min(ROWS - 1, activeCell.row + 1), activeCell.col); handled = true; break; case 'ArrowLeft': if (document.activeElement === formulaInput && formulaInput.selectionStart > 0) { handled = false; } else { handleFormulaInputChange(); if (document.activeElement === formulaInput) formulaInput.blur(); setActiveCell(activeCell.row, Math.max(0, activeCell.col - 1)); handled = true; } break; case 'ArrowRight': if (document.activeElement === formulaInput && formulaInput.selectionStart < formulaInput.value.length) { handled = false; } else { handleFormulaInputChange(); if (document.activeElement === formulaInput) formulaInput.blur(); setActiveCell(activeCell.row, Math.min(COLS - 1, activeCell.col + 1)); handled = true; } break; default: if (!isInputFocused && !isMenuActive && !isDropdownOpen && event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) { formulaInput.value = event.key; formulaInput.focus(); formulaInput.setSelectionRange(formulaInput.value.length, formulaInput.value.length); handled = true; } break; } } if (handled) { event.preventDefault(); event.stopPropagation(); } }
+        function handleBodyClick(event) { if (isMenuActive || isDropdownOpen) { const clickedMenuBar = menuBar.contains(event.target); const clickedDropdown = dropdownContainer.contains(event.target); if (!clickedMenuBar && !clickedDropdown) { deactivateMenu(); } } }
+        function updateStatusBar(text) { statusBar.textContent = text; }
+
+        // *** UPDATED: Scroll handler to toggle sticky position ***
+        const handleGridScroll = debounce(() => {
+            // Select the potentially problematic sticky headers
+            const stickyRowHeaders = spreadsheetTable.querySelectorAll('tbody th:first-child');
+            const topLeftHeader = spreadsheetTable.querySelector('thead th:first-child');
+
+            const headersToFix = Array.from(stickyRowHeaders);
+            if (topLeftHeader) {
+                 headersToFix.push(topLeftHeader);
+            }
+             if (headersToFix.length === 0) return;
+
+            // console.log("Attempting repaint on", headersToFix.length, "headers by toggling position..."); // Debug
+
+            // 1. Temporarily remove stickiness
+            headersToFix.forEach(th => {
+                 // Check if the element actually *has* sticky positioning applied by CSS
+                 // This check might be fragile if styles change, but avoids setting 'static' unnecessarily
+                 const computedStyle = window.getComputedStyle(th);
+                 if (computedStyle.position === 'sticky') {
+                    th.style.position = 'static';
+                 }
+            });
+
+            // 2. Force reflow - reading offsetHeight is a common way
+            void gridContainer.offsetHeight;
+
+            // 3. Restore stickiness by removing the inline style
+            //    (allowing the CSS rule to take effect again)
+            headersToFix.forEach(th => {
+                 // Only remove the style if we added it
+                 if (th.style.position === 'static') {
+                     th.style.position = ''; // Remove inline style
+                 }
+            });
+
+            // console.log("Repaint position toggle complete."); // Debug
+        }, 150); // Slightly longer debounce might help ensure scroll has fully stopped
+
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                 splashScreen.classList.add('hidden');
+                 renderMenu(); createGrid(); setActiveCell(0, 0, false);
+                 // Existing listeners
+                 gridContainer.addEventListener('click', handleGridClick);
+                 formulaInput.addEventListener('change', handleFormulaInputChange);
+                 formulaInput.addEventListener('blur', handleFormulaInputChange);
+                 formulaInput.addEventListener('focus', handleFormulaInputFocus);
+                 document.addEventListener('keydown', handleKeyDown);
+                 document.body.addEventListener('click', handleBodyClick);
+                 // Add scroll listener
+                 gridContainer.addEventListener('scroll', handleGridScroll);
+
+                 updateStatusBar("READY - Web Quattro v0.12");
+            }, SPLASH_DURATION);
+        });
+    </script>
+</body>
+</html>
